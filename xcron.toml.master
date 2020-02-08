@@ -1,0 +1,16 @@
+
+env = "debug" # debug, prod
+http_port = 8080
+monitor_port = 9910
+peer_port = 8899
+raft_dir = "./"
+raft_file = "./"
+
+[peer]
+peer_hosts = ["192.24.1.1","192.24.1.2","192.24.1.3"]
+
+[group]
+group_id = 101
+group_role = "master" # master,slave
+
+
