@@ -33,6 +33,8 @@
 <center>
     <img src="https://github.com/alwaysthanks/xcron/blob/master/doc/cluster_arch.png">
 </center>
+
+
 #### 5.系统分析
 
 1.组组之间:
@@ -104,7 +106,7 @@ data表:
     }
 }
 ```
-###### 6.2 删除任务
+##### 6.2 删除任务
 
 - 接口：/xcron/deleteTask
 - 调用方式：POST
@@ -129,7 +131,7 @@ data表:
 	"code": 0,
 }
 ```
-###### 6.3 查询任务
+##### 6.3 查询任务
 
 - 接口：/xcron/queryTask
 - 调用方式：POST
@@ -171,16 +173,15 @@ callback表:
 
 ```json
 {
-	"uuid": "29e2f4b4-0ffd-4eaf-8185-f55b45cc6f87",
-	"code": 0,
-    "data": {
-        "task_id":"12345",
-
+    "uuid":"29e2f4b4-0ffd-4eaf-8185-f55b45cc6f87",
+    "code":0,
+    "data":{
+        "task_id":"12345"
     }
 }
 ```
 
-##### 7.部署模式
+#### 7.部署模式
 
 (1).node模式(TODO)
 
