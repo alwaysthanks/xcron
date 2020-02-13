@@ -1,160 +1,153 @@
 package dispatch
 
 import (
-	"bytes"
-	"errors"
-	"github.com/alwaysthanks/xcron/global"
-	"github.com/alwaysthanks/xcron/lib/http"
-	"github.com/alwaysthanks/xcron/lib/json"
+	"fmt"
+	"github.com/alwaysthanks/xcron/core/engine"
+	"github.com/alwaysthanks/xcron/core/entity"
+	"github.com/alwaysthanks/xcron/core/global"
+	"github.com/alwaysthanks/xcron/core/lib/json"
+	"github.com/alwaysthanks/xcron/trigger"
+	"github.com/grandecola/bigqueue"
 	"github.com/ouqiang/timewheel"
-	"github.com/robfig/cron"
 	"log"
+	"os"
 	"strconv"
-	"sync/atomic"
 	"time"
 )
 
-var (
-	errHookIsInvalid = errors.New("hook is invalid")
-)
-
-var (
-	//callback http client
-	httpClient = http.NewHttpClient(3, time.Second*3)
-)
-
 const (
-	TaskTypeInstance = 1
-	TaskTypeCrontab  = 2
+	EmptySleepInterval  = time.Millisecond * 200 // 200ms
+	PlanBSleepInterval  = time.Second * 5
+	DispatcherStartWork = time.Second * 5
 )
 
-const (
-	TaskStateStore = 0
-	TaskStateSet   = 1
-	TaskStatePrev  = 2
-	TaskStateAfter = 3
-)
-
-//run Task hook func
-type Hook func(taskId string) (task *XcronTask, err error)
+func Init() error {
+	dispatcher := NewDispatcher()
+	go func() {
+		//sleep for current machine data ready
+		time.Sleep(DispatcherStartWork)
+		dispatcher.Loop()
+	}()
+	return nil
+}
 
 type Dispatcher struct {
 	logger *log.Logger
-	//task running pre,after hook
-	preHook   Hook
-	afterHook Hook
-	//tw for immediate task
+	//tw for planB task
 	tw *timewheel.TimeWheel
-	//cron for crontab task
-	cron *cron.Cron
+	//local Addr
+	localAddr string
 }
 
-func NewDispatcher(logger *log.Logger, preHook, afterHook Hook) (*Dispatcher, error) {
-	//hook
-	if preHook == nil || afterHook == nil {
-		return nil, errHookIsInvalid
-	}
+func NewDispatcher() *Dispatcher {
+	logger := log.New(os.Stderr, "[xcron-dispatcher] ", log.LstdFlags)
 	dispatcher := &Dispatcher{
 		logger:    logger,
-		preHook:   preHook,
-		afterHook: afterHook,
+		localAddr: global.XcronState.GetLocalAddr(),
 	}
 	//time wheel
 	tw := timewheel.New(time.Second, 3600, func(reqTaskId interface{}) {
 		taskId := reqTaskId.(string)
-		if err := dispatcher.runTask(taskId); err != nil {
-			dispatcher.logger.Printf("[error] timewheel run task error. taskId:%s, err:%s", taskId, err.Error())
-			atomic.AddInt64(&global.XcronState.InstanceFailedTaskCount, 1)
-			return
+		if err := dispatcher.invokeTask(taskId); err != nil {
+			dispatcher.logger.Printf("[error][dispatcher] timewheel run planB task error. taskId:%s, err:%s", taskId, err.Error())
 		}
-		atomic.AddInt64(&global.XcronState.InstanceCompleteTaskCount, 1)
+		dispatcher.logger.Printf("[info][dispatcher] timewheel task run in planB.taskId:%s, planB host:%s", taskId, dispatcher.localAddr)
 	})
 	tw.Start()
-	//crontab
-	cr := cron.New(cron.WithChain(cron.Recover(cron.DefaultLogger)))
-	cr.Start()
-	return &Dispatcher{tw: tw, cron: cr, preHook: preHook, afterHook: afterHook}, nil
+	dispatcher.tw = tw
+	return dispatcher
 }
 
-//running task
-func (dispatcher *Dispatcher) runTask(taskId string) error {
-	var err error
-	var task *XcronTask
-	if task, err = dispatcher.preHook(taskId); err != nil {
-		dispatcher.logger.Printf("[error][Dispatcher.runTask] preHook error. taskId:%d,err:%s", taskId, err.Error())
-		return err
-	}
-	if err = task.Callback.Post(); err != nil {
-		dispatcher.logger.Printf("[error][Dispatcher.runTask] callback error. taskId:%d,err:%s", taskId, err.Error())
-		return err
-	}
-	if _, err = dispatcher.afterHook(taskId); err != nil {
-		dispatcher.logger.Printf("[error][Dispatcher.runTask] afterHook error. taskId:%d,err:%s", taskId, err.Error())
-		return err
-	}
-	return nil
-}
-
-//add instance timer
-func (dispatcher *Dispatcher) SetInstanceTask(taskId string, timestamp int64) (timerId string, err error) {
-	duration := time.Now().Unix() - timestamp
-	dispatcher.tw.AddTimer(time.Duration(duration)*time.Second, taskId, taskId)
-	atomic.AddInt64(&global.XcronState.InstanceAddTaskCount, 1)
-	return taskId, nil
-}
-
-//add crontab timer
-func (dispatcher *Dispatcher) SetCrontabTask(taskId string, crontab string) (timerId string, err error) {
-	cronId, _ := dispatcher.cron.AddFunc(crontab, func() {
-		if err := dispatcher.runTask(taskId); err != nil {
-			atomic.AddInt64(&global.XcronState.CrontabFailedTaskCount, 1)
-			dispatcher.logger.Printf("[error] crontab run task error. taskId:%s, err:%s", taskId, err.Error())
-			return
+func (dispatcher *Dispatcher) Loop() {
+	for {
+		data, err := engine.DeQueue()
+		if err != nil {
+			if err == bigqueue.ErrEmptyQueue {
+				time.Sleep(EmptySleepInterval)
+			} else {
+				dispatcher.logger.Printf("[error][Dispatcher.Loop] dequeue error. err:%s", err.Error())
+			}
+			continue
 		}
-		atomic.AddInt64(&global.XcronState.CrontabRunTaskCount, 1)
-	})
-	atomic.AddInt64(&global.XcronState.CrontabAddTaskCount, 1)
-	timerId = strconv.Itoa(int(cronId))
-	return timerId, nil
+		var task = &entity.XcronTask{}
+		if err := json.Unmarshal(data, task); err != nil {
+			dispatcher.logger.Printf("[error][Dispatcher.Loop] unmarsh task error. err:%s", err.Error())
+			continue
+		}
+		//retry 3 times
+		var flag bool
+		for i := 1; i <= 3; i++ {
+			if err := engine.SetData(task.TaskId, data); err != nil {
+				dispatcher.logger.Printf("[error][Dispatcher.Loop][%d] engine setData for task error. taskId:%s,err:%s", i, task.TaskId, err.Error())
+			} else {
+				flag = true
+				break
+			}
+		}
+		if !flag {
+			dispatcher.logger.Printf("[error][Dispatcher.Loop] engine setData for task retry all failed. taskId:%s", task.TaskId)
+			continue
+		}
+		//distribute
+		if err := dispatcher.distributeTask(task); err != nil {
+			dispatcher.logger.Printf("[error][Dispatcher.Loop] distribute task error. taskId:%s,err:%s", task.TaskId, err.Error())
+		}
+	}
 }
 
-//del timer
-
-//dispatcher stop
-func (dispatcher *Dispatcher) Stop() {
-	dispatcher.tw.Stop()
-	dispatcher.cron.Stop()
+func (dispatcher *Dispatcher) distributeTask(task *entity.XcronTask) error {
+	//current serial number
+	activePeersCount := engine.GetActivePeersCount()
+	//serial mod number
+	serialNumber := engine.GetActivePeerIndex(dispatcher.localAddr) - 1
+	planBNumber := serialNumber - 1
+	if planBNumber < 0 {
+		planBNumber = activePeersCount - 1
+	}
+	if serialNumber < 0 || activePeersCount == 0 {
+		dispatcher.logger.Printf("[error][dispatcher.distributeTask] get serial number error. activePeersCount:%d,serialNumber:%d", activePeersCount, serialNumber)
+		return fmt.Errorf("serial count error")
+	}
+	mod := task.TaskHash % activePeersCount
+	dispatcher.logger.Printf("[info][dispatcher.distributeTask] task begin dispatch. cur machine info:host:%s,activePeersCount:%d,serialNumber:%d, mod:%d", dispatcher.localAddr, activePeersCount, serialNumber, mod)
+	//if only one machine, not planB
+	if serialNumber != 0 && mod == planBNumber {
+		//double check for planB
+		dispatcher.logger.Printf("[info][dispatcher.distributeTask] check for planB task. taskId:%s,host:%s", task.TaskId, dispatcher.localAddr)
+		key := fmt.Sprintf("%s:%s", task.TaskId, dispatcher.localAddr)
+		dispatcher.tw.AddTimer(PlanBSleepInterval, key, task.TaskId)
+		return nil
+	} else if mod != serialNumber {
+		dispatcher.logger.Printf("[info][dispatcher.distributeTask] not this machine for work. host:%s, activePeersCount:%d,serialNumber:%d, mod:%d", dispatcher.localAddr, activePeersCount, serialNumber, mod)
+		return nil
+	}
+	//invoke
+	return dispatcher.invokeTask(task.TaskId)
 }
 
-//xcron task entity
-type XcronTask struct {
-	TaskId     string    `json:"task_id"`   //task uuid
-	TaskHash   int64     `json:"task_hash"` //task number for hash strategy
-	TimerId    string    `json:"timer_id"`  // task run timerId, stop/delete timer
-	Type       int16     `json:"type"`
-	Host       string    `json:"host"` // which host
-	State      int16     `json:"state"`
-	Format     string    `json:"format"`
-	RunTimes   int32     `json:"run_times"`
-	Callback   *Callback `json:"callback"`
-	CreateTime int64     `json:"create_time"`
-}
-
-func (task *XcronTask) Encode() []byte {
-	data, _ := json.Marshal(task)
-	return data
-}
-
-type Callback struct {
-	Url  string                 `json:"url"`
-	Data map[string]interface{} `json:"data"`
-}
-
-func (call *Callback) Post() error {
-	reqBody, _ := json.Marshal(call.Data)
-	if _, err := httpClient.Post(call.Url, bytes.NewReader(reqBody)); err != nil {
-		log.Printf("[error][Callback.Post] error. url:%s,body:%s,err:%s", call.Url, string(reqBody), err.Error())
+func (dispatcher *Dispatcher) invokeTask(taskId string) error {
+	task, err := entity.GetTask(taskId)
+	if err != nil {
+		dispatcher.logger.Printf("[error][dispatcher.invokeTask] GetTask error. taskId:%s,err:%s", task.TaskId, err.Error())
 		return err
 	}
-	return nil
+	if task.State != entity.TaskStateQueue {
+		dispatcher.logger.Printf("[info][dispatcher.invokeTask] task state(%d) not queue. task has run normally.taskId:%s", task.State, task.TaskId)
+		return fmt.Errorf("task state not queue")
+	}
+	//invoke
+	var timerId string
+	switch task.Type {
+	case entity.TaskTypeInstance:
+		timestamp, _ := strconv.ParseInt(task.Format, 10, 64)
+		timerId, _ = trigger.SetInstanceTask(task.TaskId, timestamp)
+	case entity.TaskTypeCrontab:
+		timerId, _ = trigger.SetCrontabTask(task.TaskId, task.Format)
+	default:
+		return fmt.Errorf("not support task type")
+	}
+	task.TimerId = timerId
+	task.State = entity.TaskStateSet
+	task.Host = dispatcher.localAddr
+	return entity.SetTask(task)
 }

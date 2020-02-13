@@ -2,10 +2,10 @@ package server
 
 import (
 	"fmt"
-	"github.com/alwaysthanks/xcron/dispatch"
-	"github.com/alwaysthanks/xcron/engine"
-	"github.com/alwaysthanks/xcron/lib/json"
-	"github.com/alwaysthanks/xcron/lib/uuid"
+	"github.com/alwaysthanks/xcron/application"
+	"github.com/alwaysthanks/xcron/core/entity"
+	"github.com/alwaysthanks/xcron/core/lib/json"
+	"github.com/alwaysthanks/xcron/core/lib/uuid"
 	"github.com/facebookgo/grace/gracehttp"
 	"log"
 	"net/http"
@@ -18,10 +18,10 @@ type httpServer struct {
 }
 
 //server
-func NewHttpServer(httpPort int64, engine *engine.Engine) *httpServer {
+func NewHttpServer(httpPort int64) *httpServer {
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", httpPort),
-		Handler:      newHttpRouter(engine),
+		Handler:      newHttpRouter(),
 		ReadTimeout:  time.Second * 10,
 		WriteTimeout: time.Second * 10,
 		IdleTimeout:  time.Second * 30,
@@ -37,11 +37,10 @@ func (h *httpServer) Run() {
 
 //adaptor
 type httpRouterAdaptor struct {
-	engine *engine.Engine
 }
 
-func newHttpRouter(engine *engine.Engine) *http.ServeMux {
-	adaptor := &httpRouterAdaptor{engine: engine}
+func newHttpRouter() *http.ServeMux {
+	adaptor := &httpRouterAdaptor{}
 	mux := http.NewServeMux()
 	//http router path
 	mux.HandleFunc("/xcron/createTask", adaptor.wrap(adaptor.createTask))
@@ -86,7 +85,7 @@ type taskCallback struct {
 
 const (
 	//request uuid
-	XcronRequestUUId = "Xcron-Request-Uuid"
+	XcronRequestUUId = "Xcron-Request-UUId"
 	//http task type
 	httpTaskTypeInstance = 1
 	httpTaskTypeCrontab  = 2
@@ -147,11 +146,11 @@ func (adaptor *httpRouterAdaptor) createInstanceTask(w http.ResponseWriter, requ
 		})
 		return
 	}
-	callback := &dispatch.Callback{
+	callback := &entity.Callback{
 		Url:  reqTask.Callback.Url,
 		Data: reqTask.Callback.Body,
 	}
-	taskId, err := adaptor.engine.AddInstanceTask(timestamp, callback)
+	taskId, err := application.AddInstanceTask(timestamp, callback)
 	if err != nil {
 		adaptor.send(w, &httpResponseData{
 			RequestId: requestId,
