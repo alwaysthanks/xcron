@@ -17,6 +17,11 @@ import (
 	"time"
 )
 
+const (
+	//tick 8s for peer heartbeat
+	HeartbeatCheckTimeInterval = time.Second * 8
+)
+
 type HttpTransport struct {
 	*rafthttp.HTTPTransport
 	addr   string
@@ -52,7 +57,7 @@ func (t *HttpTransport) Start() {
 		Handler:      mux,
 		ReadTimeout:  time.Second * 2,
 		WriteTimeout: time.Second * 2,
-		IdleTimeout:  time.Second * 10,
+		IdleTimeout:  time.Second * 15,
 	}
 	go func() {
 		if err := server.ListenAndServe(); err != nil {
@@ -144,7 +149,7 @@ func (t *HttpTransport) send(resp http.ResponseWriter, respData *TransportRespon
 }
 
 func (t *HttpTransport) heartbeat() {
-	httpClient := httputil.NewHttpClient(2, time.Second*3)
+	httpClient := httputil.NewHttpClient(2, time.Second*2)
 	routinePool := routine.NewRoutinePool(20)
 	localAddr := global.XcronState.GetLocalAddr()
 	request := TransportRequest{
@@ -155,7 +160,7 @@ func (t *HttpTransport) heartbeat() {
 	//init set self
 	t.engine.activePeers.Add(localAddr)
 	//loop
-	postFn := func(host string) {
+	postHeartbeatFn := func(host string) {
 		if strings.Contains(host, localAddr) {
 			return
 		}
@@ -169,13 +174,13 @@ func (t *HttpTransport) heartbeat() {
 		})
 	}
 	//loop heartbeat
-	for range time.Tick(time.Second * 30) {
+	for range time.Tick(HeartbeatCheckTimeInterval) {
 		//add self
 		t.engine.activePeers.Add(localAddr)
 		//curl other peers
 		peers := global.XcronConf.GetPeers()
 		for _, peer := range peers {
-			postFn(peer)
+			postHeartbeatFn(peer)
 		}
 	}
 }

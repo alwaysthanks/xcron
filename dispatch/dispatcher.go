@@ -1,13 +1,14 @@
 package dispatch
 
 import (
+	"context"
 	"fmt"
 	"github.com/alwaysthanks/xcron/core/engine"
 	"github.com/alwaysthanks/xcron/core/entity"
 	"github.com/alwaysthanks/xcron/core/global"
 	"github.com/alwaysthanks/xcron/core/lib/json"
+	"github.com/alwaysthanks/xcron/core/lib/routine"
 	"github.com/alwaysthanks/xcron/trigger"
-	"github.com/grandecola/bigqueue"
 	"github.com/ouqiang/timewheel"
 	"log"
 	"os"
@@ -16,9 +17,12 @@ import (
 )
 
 const (
-	EmptySleepInterval  = time.Millisecond * 200 // 200ms
-	PlanBSleepInterval  = time.Second * 5
-	DispatcherStartWork = time.Second * 5
+	//use planB machine for task process when priority machine downtime accidentally
+	PlanBSleepInterval = time.Second * 5
+	//when server start, db data need recover first.
+	DispatcherStartWork = time.Second * 10
+	//parallel process queue data
+	ParallelRoutineCount = 3
 )
 
 func Init() error {
@@ -48,53 +52,55 @@ func NewDispatcher() *Dispatcher {
 	//time wheel
 	tw := timewheel.New(time.Second, 3600, func(reqTaskId interface{}) {
 		taskId := reqTaskId.(string)
+		dispatcher.logger.Printf("[info][dispatcher] planB timewheel task run.taskId:%s,planB host:%s", taskId, dispatcher.localAddr)
+		//for planB task invoke
 		if err := dispatcher.invokeTask(taskId); err != nil {
-			dispatcher.logger.Printf("[error][dispatcher] timewheel run planB task error. taskId:%s, err:%s", taskId, err.Error())
+			dispatcher.logger.Printf("[error][dispatcher] planB timewheel run planB task error. taskId:%s, err:%s", taskId, err.Error())
 		}
-		dispatcher.logger.Printf("[info][dispatcher] timewheel task run in planB.taskId:%s, planB host:%s", taskId, dispatcher.localAddr)
 	})
 	tw.Start()
 	dispatcher.tw = tw
 	return dispatcher
 }
 
+//Loop for consume task data.
 func (dispatcher *Dispatcher) Loop() {
-	for {
-		data, err := engine.DeQueue()
-		if err != nil {
-			if err == bigqueue.ErrEmptyQueue {
-				time.Sleep(EmptySleepInterval)
-			} else {
-				dispatcher.logger.Printf("[error][Dispatcher.Loop] dequeue error. err:%s", err.Error())
-			}
-			continue
-		}
+	consumeFunc := func(data []byte) error {
 		var task = &entity.XcronTask{}
 		if err := json.Unmarshal(data, task); err != nil {
 			dispatcher.logger.Printf("[error][Dispatcher.Loop] unmarsh task error. err:%s", err.Error())
-			continue
+			return err
 		}
-		//retry 3 times
-		var flag bool
-		for i := 1; i <= 3; i++ {
-			if err := engine.SetData(task.TaskId, data); err != nil {
-				dispatcher.logger.Printf("[error][Dispatcher.Loop][%d] engine setData for task error. taskId:%s,err:%s", i, task.TaskId, err.Error())
-			} else {
-				flag = true
-				break
-			}
-		}
-		if !flag {
-			dispatcher.logger.Printf("[error][Dispatcher.Loop] engine setData for task retry all failed. taskId:%s", task.TaskId)
-			continue
+		//set data
+		if err := engine.SetData(task.TaskId, data); err != nil {
+			dispatcher.logger.Printf("[error][Dispatcher.Loop] engine setData for task error. taskId:%s,err:%s", task.TaskId, err.Error())
+			return err
 		}
 		//distribute
 		if err := dispatcher.distributeTask(task); err != nil {
 			dispatcher.logger.Printf("[error][Dispatcher.Loop] distribute task error. taskId:%s,err:%s", task.TaskId, err.Error())
+			return err
 		}
+		return nil
 	}
+	//Loop for
+	pool := routine.NewRoutinePool(ParallelRoutineCount)
+	for {
+		//parallel go routine process
+		pool.Start(context.Background(), func(t *routine.Task) error {
+			data, err := engine.DeQueue(consumeFunc)
+			if err != nil {
+				dispatcher.logger.Printf("[error][Dispatcher.Loop] consume queue error. err:%s", err.Error())
+				return err
+			}
+			dispatcher.logger.Printf("[info][Dispatcher.Loop] consume queue success.data:%s", string(data))
+			return nil
+		})
+	}
+
 }
 
+//distributeTask to ensure which machine should invoke task.
 func (dispatcher *Dispatcher) distributeTask(task *entity.XcronTask) error {
 	//current serial number
 	activePeersCount := engine.GetActivePeersCount()
@@ -125,6 +131,7 @@ func (dispatcher *Dispatcher) distributeTask(task *entity.XcronTask) error {
 	return dispatcher.invokeTask(task.TaskId)
 }
 
+//invokeTask to invoke task in current work machine.
 func (dispatcher *Dispatcher) invokeTask(taskId string) error {
 	task, err := entity.GetTask(taskId)
 	if err != nil {

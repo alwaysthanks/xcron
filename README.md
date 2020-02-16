@@ -15,7 +15,6 @@
 
 #### 3.系统特点
 
-- 高可用, 高可靠
 - 数据强一致性
 - 任务故障转移
 - 集群快速扩容
@@ -81,10 +80,10 @@ data表:
 
 ```json
 {
-    "uuid":"29e2f4b4-0ffd-4eaf-8185-f55b45cc6f87",
-    "code":0,
-    "data":{
-        "task_id":"e2f4b4-0ffd-4eaf-8185-f"
+    "uuid": "80eb2fb8-2724-4707-9484-8e7d07b9171d",
+    "code": 0,
+    "data": {
+        "task_id": "289057701458138645"
     }
 }
 ```
@@ -109,8 +108,8 @@ data表:
 
 ```json
 {
-	"uuid": "29e2f4b4-0ffd-4eaf-8185-f55b45cc6f87",
-	"code": 0,
+    "uuid":"411b94ed-0455-4f8b-85e0-f9a6c164ef39",
+    "code":0
 }
 ```
 ##### 5.3 查询任务
@@ -155,10 +154,10 @@ callback表:
 
 ```json
 {
-    "uuid":"29e2f4b4-0ffd-4eaf-8185-f55b45cc6f87",
-    "code":0,
-    "data":{
-        "task_id":"12345"
+    "uuid": "347417d8-2067-4292-851b-6fc06f6869cd",
+    "code": 0,
+    "data": {
+        "task_id": "289058143990765077"
     }
 }
 ```
@@ -166,12 +165,72 @@ callback表:
 #### 6.使用说明
 
 ```shell
-#项目根目录
+#1.项目根目录
 bash build.sh
-#修改配置xcron.toml
-#运行服务
+#2.修改配置文件 xcron.toml
+# - 2.1 单机版可直接运行
+# - 2.2 集群版需要修改配置文件如下:
+# - peer_hosts = ["192.24.1.1:8899","192.24.1.2:8899","192.24.1.3:8899"]
+#3.运行服务
 ./xcron_server
 ```
 
+#### 7.压测报告
 
+##### 7.1 ab压测准备
+
+硬件配置:
+
+```
+ 虚拟机: core: 4cpu; memory: 8g
+```
+
+ab命令:
+
+```bash
+ab -c 200 -n 10000 -T 'application/json' -p json.txt http://host:8000/xcron/createTask
+
+#json.txt
+{
+	"type":1,
+	"format":"1581823751",
+	"callback":{
+		"url":"http://test.demo.com:8810",
+		"body":{
+			"params":[1,2],
+			"data":"10.10.10",
+			"count":1
+		}
+	}
+}
+```
+
+##### 7.2 压测结果分析
+
+```bash
+#1. ab结果
+	Requests per second:    1982.60 [#/sec] (mean)
+	Time per request:       100.878 [ms] (mean)
+#2. cpu消耗
+	10%左右
+#3. 内存消耗
+	队列堆积峰值:RES 105M
+	队列消费结束:RES 59M
+#4. 任务消费耗时
+	任务总数:10000
+	消费持续时间:180s
+#5. 磁盘文件大小
+	raft.log: 40M
+```
+
+##### 7.3 并行执行10000任务分析
+
+```bash
+#1. 10000任务并行执行
+	持续时间: 12s
+	raft.log文件大小: 41M
+	物理内存RES: 131M
+#2. 数据分析
+	约100task/1M
+```
 

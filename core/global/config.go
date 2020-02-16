@@ -32,13 +32,12 @@ func InitConfig(filePath string) error {
 }
 
 type config struct {
-	Env         string      `toml:"env"`
-	HttpPort    int64       `toml:"http_port"`
-	MonitorPort int64       `toml:"monitor_port"`
-	PeerPort    int64       `toml:"peer_port"`
-	RaftDir     string      `toml:"raft_dir"`
-	PeerConf    peerConfig  `toml:"peer"`
-	GroupConf   groupConfig `toml:"group"`
+	Env         string     `toml:"env"`
+	HttpPort    int64      `toml:"http_port"`
+	MonitorPort int64      `toml:"monitor_port"`
+	PeerPort    int64      `toml:"peer_port"`
+	RaftDir     string     `toml:"raft_dir"`
+	PeerConf    peerConfig `toml:"peer"`
 }
 
 func (conf config) AddPeer(peer string) error {
@@ -107,10 +106,4 @@ func (peer peerConfig) initPeerFile(file string) error {
 		return err
 	}
 	return ioutil.WriteFile(file, buf.Bytes(), 0755)
-}
-
-type groupConfig struct {
-	GroupId          int64    `toml:"group_id"`   //group relation
-	GroupRole        string   `toml:"group_role"` // master and slave role
-	GroupMasterHosts []string `toml:"group_master_hosts"`
 }

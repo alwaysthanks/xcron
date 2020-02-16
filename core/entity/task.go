@@ -10,11 +10,13 @@ import (
 )
 
 const (
+	//Task type
 	TaskTypeInstance = 1
 	TaskTypeCrontab  = 2
 )
 
 const (
+	//Task state
 	TaskStateQueue = 0
 	//TaskStateStore = 0
 	TaskStateSet   = 1
@@ -62,7 +64,7 @@ type Callback struct {
 
 var (
 	//callback http client
-	httpClient = http.NewHttpClient(3, time.Second*3)
+	httpClient = http.NewHttpClient(3, time.Second*2)
 )
 
 func (call *Callback) Post() error {

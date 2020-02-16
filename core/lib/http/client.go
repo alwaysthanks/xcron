@@ -18,7 +18,7 @@ func NewHttpClient(tryTimes int, timeout time.Duration) *HttpClient {
 		Transport: &http.Transport{
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 20,
-			IdleConnTimeout:     time.Second * 15,
+			IdleConnTimeout:     time.Second * 10,
 		},
 		Timeout: timeout,
 	}

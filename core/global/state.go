@@ -5,10 +5,6 @@ import (
 	"log"
 )
 
-const (
-	HashDataShard = 10240
-)
-
 var XcronState *state
 
 func init() {
@@ -19,14 +15,12 @@ func init() {
 	log.Printf("local addr:%s", localNetAddr)
 	XcronState = &state{
 		localNetWorkAddr: localNetAddr,
-		groupDataShard:   HashDataShard,
 	}
 }
 
 type state struct {
 	localNetWorkAddr string
-	isMachineActive  bool  //is machine working normally
-	groupDataShard   int32 //group data sharding param
+	isMachineActive  bool //is machine working normally
 
 	//store task count
 	StoreInstanceTaskCount int64
@@ -42,10 +36,6 @@ type state struct {
 	InstanceFailedTaskCount int64
 	//instance retry
 	InstanceRetryTaskCount int64
-}
-
-func (s *state) GetDataShard() int32 {
-	return s.groupDataShard
 }
 
 func (s *state) ActiveMachine() {

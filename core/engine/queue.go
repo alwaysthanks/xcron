@@ -1,57 +1,26 @@
 package engine
 
-import (
-	"crypto/md5"
-	"fmt"
-	"github.com/alwaysthanks/xcron/core/lib/json"
-)
-
 //mq package as queue use raft engine
 
-const (
-	StateEnqueueData = 1
-	StateDequeueData = 2
-)
-
-type queueItem struct {
-	State int    `json:"state"`
-	Data  []byte `json:"data"`
-}
-
+//EnQueue make data in queue
 func EnQueue(data []byte) error {
-	return setQueue(StateEnqueueData, data)
+	return engine.enQueue(data)
 }
 
-func DeQueue() (data []byte, err error) {
-	for {
-		data, err = engine.bigQueue.Dequeue()
-		if err != nil {
-			return nil, err
-		}
-		key := fmt.Sprintf("%x", md5.Sum(data))
-		ret, err := engine.queueGet(key)
-		if err != nil {
-			return nil, err
-		}
-		var item queueItem
-		json.Unmarshal(ret, &item)
-		if item.State == StateEnqueueData {
-			break
-		}
+type FuncConsume func(data []byte) error
+
+//DeQueue to consume data which enqueue by ack through FuncConsume function
+//ack can wipe the raft log re again where the system restart.
+func DeQueue(fn FuncConsume) (data []byte, err error) {
+	data, err = engine.deQueue()
+	if err != nil {
+		return nil, err
 	}
-	//todo ack
-	if err := setQueue(StateDequeueData, data); err != nil {
+	if err := fn(data); err != nil {
+		return nil, err
+	}
+	if err := engine.ackQueue(data); err != nil {
 		return nil, err
 	}
 	return data, nil
-}
-
-func setQueue(state int, data []byte) error {
-	item := queueItem{
-		State: state,
-		Data:  data,
-	}
-	key := fmt.Sprintf("%x", md5.Sum(data))
-	val, _ := json.Marshal(&item)
-	return engine.queueSet(key, val)
 }

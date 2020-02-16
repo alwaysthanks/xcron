@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -86,7 +87,7 @@ func NewEngine(dir string, bindAddr string) *RaftEngine {
 	return engine
 }
 
-//Start opens the engine.
+//Start the engine.
 func (engine *RaftEngine) Start() error {
 	//set Raft config
 	config := raft.DefaultConfig()
@@ -120,7 +121,7 @@ func (engine *RaftEngine) Start() error {
 	}
 	engine.raft = ra
 	//init big queue
-	queue, err := bigqueue.NewMmapQueue(engine.raftDir, bigqueue.SetArenaSize(4*1024*1024), bigqueue.SetMaxInMemArenas(32))
+	queue, err := bigqueue.NewMmapQueue(engine.raftDir, bigqueue.SetArenaSize(16*1024*1024), bigqueue.SetMaxInMemArenas(8))
 	if err != nil {
 		return fmt.Errorf("new big queue error. err:%s", err.Error())
 	}
@@ -260,6 +261,51 @@ func (engine *RaftEngine) deleteData(key string) error {
 	return nil
 }
 
+const (
+	//queue state
+	XcronQueueStateEn  = 1 //enqueue
+	XcronQueueStateAck = 2 //ack
+	//if bigqueue empty, sleep 200ms
+	XcronQueueEmptySleep = time.Millisecond * 200 // 200ms
+)
+
+type queueItem struct {
+	State int    `json:"state"`
+	Data  []byte `json:"data"`
+}
+
+func (engine *RaftEngine) deQueue() (data []byte, err error) {
+	for {
+		data, err = engine.bigQueue.Dequeue()
+		if err != nil {
+			if err == bigqueue.ErrEmptyQueue {
+				time.Sleep(XcronQueueEmptySleep)
+				continue
+			}
+			return nil, err
+		}
+		key := fmt.Sprintf("%x", md5.Sum(data))
+		ret, err := engine.queueGet(key)
+		if err != nil {
+			return nil, err
+		}
+		var item queueItem
+		json.Unmarshal(ret, &item)
+		if item.State == XcronQueueStateEn {
+			break
+		}
+	}
+	return data, nil
+}
+
+func (engine *RaftEngine) ackQueue(data []byte) error {
+	return engine.queueSet(XcronQueueStateAck, data)
+}
+
+func (engine *RaftEngine) enQueue(data []byte) error {
+	return engine.queueSet(XcronQueueStateEn, data)
+}
+
 //queueGet get queue info for the given key.
 func (engine *RaftEngine) queueGet(key string) ([]byte, error) {
 	if err := engine.checkState(); err != nil {
@@ -273,15 +319,22 @@ func (engine *RaftEngine) queueGet(key string) ([]byte, error) {
 	return []byte{}, KeyNotFoundError
 }
 
-//queueSet sets queue info for the given key.
-func (engine *RaftEngine) queueSet(key string, value []byte) error {
+//queueSet use raft set data in queue map or enqueue by the state.
+func (engine *RaftEngine) queueSet(state int, data []byte) error {
 	if err := engine.checkState(); err != nil {
 		return err
 	}
+	item := queueItem{
+		State: state,
+		Data:  data,
+	}
+	key := fmt.Sprintf("%x", md5.Sum(data))
+	val, _ := json.Marshal(&item)
+
 	c := &operation{
 		Op:    "queue",
 		Key:   key,
-		Value: value,
+		Value: val,
 	}
 	sc, _ := encodeOperation(c)
 	if err := engine.executeCmd("store", sc); err != nil {
@@ -328,7 +381,7 @@ func (engine *RaftEngine) executeCmd(reqCmd string, reqData []byte) error {
 	return f.Error()
 }
 
-var httpClient = http.NewHttpClient(3, time.Second)
+var httpClient = http.NewHttpClient(2, time.Second)
 
 //request leader info
 func (engine *RaftEngine) leaderRequest(reqUrl string, reqBody interface{}) (string, error) {
@@ -428,7 +481,7 @@ func (f *fsm) applyQueue(key string, value []byte) interface{} {
 	if _, ok := f.mqueue[key]; !ok {
 		var item queueItem
 		json.Unmarshal(value, &item)
-		if item.State == StateEnqueueData {
+		if item.State == XcronQueueStateEn {
 			f.bigQueue.Enqueue(item.Data)
 		}
 	}

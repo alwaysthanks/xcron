@@ -89,6 +89,7 @@ func (trig *Trigger) SetCrontabTask(taskId string, crontab string) (timerId stri
 	return timerId, nil
 }
 
+//todo
 //del timer
 
 //dispatcher stop
@@ -120,18 +121,18 @@ func (trig *Trigger) runTask(taskId string) error {
 func (trig *Trigger) preTask(taskId string) (task *entity.XcronTask, err error) {
 	task, err = entity.GetTask(taskId)
 	if err != nil {
-		trig.logger.Printf("[error][trig.preTask] GetTask error. taskId:%s,err:%s", taskId, err.Error())
+		trig.logger.Printf("[error][trig.preTask] getTask error. taskId:%s,err:%s", taskId, err.Error())
 		return nil, err
 	}
-	//before.atomic.Incr
+	//before.atomic increment
 	key := fmt.Sprintf("task_id:%s;run_times:%d;state:%d", taskId, task.RunTimes, entity.TaskStatePrev)
 	counter, err := engine.AtomCounter(key)
 	if err != nil {
-		trig.logger.Printf("[error][trig.preTask] distributeAtomIncr error.key:%s,err:%s", key, err.Error())
+		trig.logger.Printf("[error][trig.preTask] atomCounter error.key:%s,err:%s", key, err.Error())
 		return nil, err
 	}
 	if counter != 1 {
-		trig.logger.Printf("[info][trig.preTask] distributeAtomIncr concurrent.key:%s,counter:%d", key, counter)
+		trig.logger.Printf("[info][trig.preTask] atomCounter concurrent.key:%s,counter:%d", key, counter)
 		return nil, fmt.Errorf("concurrency run task")
 	}
 	task.State = entity.TaskStatePrev
@@ -146,7 +147,7 @@ func (trig *Trigger) preTask(taskId string) (task *entity.XcronTask, err error) 
 func (trig *Trigger) afterTask(taskId string) (task *entity.XcronTask, err error) {
 	task, err = entity.GetTask(taskId)
 	if err != nil {
-		trig.logger.Printf("[error][trig.afterTask] GetTask error. taskId:%s,err:%s", taskId, err.Error())
+		trig.logger.Printf("[error][trig.afterTask] getTask error. taskId:%s,err:%s", taskId, err.Error())
 		return nil, err
 	}
 	task.State = entity.TaskStateAfter
