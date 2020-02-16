@@ -1,6 +1,6 @@
-## xcron
+# xcron
 
-xcron is a distributed task system based on raft. it still need to be durable optimize for it's performance.[中文](https://github.com/alwaysthanks/xcron/blob/master/README_CN.md)
+xcron is a distributed task system based on `raft`. it still need to be durable optimize for it's performance.[中文](https://github.com/alwaysthanks/xcron/blob/master/README_CN.md)
 
 ### features
 
@@ -33,6 +33,8 @@ the system designed architecture:
 <center>
     <img src="https://github.com/alwaysthanks/xcron/blob/master/doc/xcron_arch.png">
 </center>
+
+
 ### http api
 
 the http api based on HTTP content-type as "application/json"
